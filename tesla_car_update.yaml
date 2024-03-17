@@ -1,0 +1,120 @@
+blueprint:
+  name: Tesla Auto Software Update
+  description: |
+    Automatically update your car's software when possible, otherwise send a notification.
+    It will only update when the software has finished downloading, the car's battery is
+    above a minimum percentage, the car is parked, and the time is right.
+
+    It will notify you when the update status changes regardless, and even let you know
+    when it's finished installing!
+  domain: automation
+  input:
+    update_target:
+      name: Tesla update entity
+      description: Choose the update entity for your Tesla
+      selector:
+        entity:
+          domain: update
+          integration: tesla_custom
+    min_battery:
+      name: Minimum battery level
+      description: Only install update if vehicle has at least this much battery %
+      default: 50
+      selector:
+        number:
+          min: 20
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+    after:
+      name: After
+      description: Only start install after this time
+      default: "23:00:00"
+      selector:
+        time:
+    before:
+      name: Before
+      description: Only start install before this time
+      default: "06:00:00"
+      selector:
+        time:
+    notify_device:
+      name: Device to notify
+      description: Device to be notified via the mobile app
+      selector:
+        device:
+          integration: mobile_app
+
+variables:
+  update_target: !input update_target
+  tesla_name: >
+    {{ state_attr(update_target, 'friendly_name').split(' Software update')[0] }}
+  entity_prefix: >
+    {{ (update_target).split('update.')[1].split('_software_update')[0] }}
+  parking_brake: "binary_sensor.{{ entity_prefix }}_parking_brake"
+  battery: "sensor.{{ entity_prefix }}_battery"
+  min_battery: !input min_battery
+
+mode: single
+trigger:
+  - platform: state
+    entity_id:
+      - !input update_target
+    attribute: latest_version
+condition:
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state.state != "unknown"
+      and trigger.to_state.state !="unknown"
+      and trigger.from_state.state != "unavailable"
+      and trigger.to_state.state !="unavailable" }}
+action:
+  - if:
+      - condition: template
+        value_template: >
+          {{ is_state(parking_brake, 'on')
+          and states(battery)|int >= min_battery
+          and 'Available' in state_attr(update_target, 'latest_version') }}
+      - condition: time
+        before: !input before
+        after: !input after
+    then:
+      - service: update.install
+        data: {}
+        target:
+          entity_id: !input update_target
+      - device_id: !input notify_device
+        domain: mobile_app
+        type: notify
+        message: >
+          Automatically updating {{ tesla_name }}'s software to {{
+          state_attr(update_target, 'latest_version') }}, woo-hoo!
+        title: Tesla Software Update Started
+      - delay:
+          hours: 0
+          minutes: 30
+          seconds: 0
+          milliseconds: 0
+    else:
+      - if:
+          - condition: template
+            value_template: |-
+              {{state_attr(update_target,
+                    'installed_version') == state_attr(update_target,
+                    'latest_version')}}
+        then:
+          - device_id: !input notify_device
+            domain: mobile_app
+            type: notify
+            message: >
+              Software update has completed for {{ tesla_name }}!
+            title: Tesla Software Update Complete
+        else:
+          - device_id: !input notify_device
+            domain: mobile_app
+            type: notify
+            message: >
+              Software update for {{ tesla_name }}:
+              {{ state_attr(update_target, 'latest_version') }}
+            title: Tesla Software Update
